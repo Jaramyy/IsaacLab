@@ -96,7 +96,7 @@ CUBOID_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "cuboid": sim_utils.CuboidCfg(
             size=(0.1, 0.1, 0.1),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
         ),
     }
 )
