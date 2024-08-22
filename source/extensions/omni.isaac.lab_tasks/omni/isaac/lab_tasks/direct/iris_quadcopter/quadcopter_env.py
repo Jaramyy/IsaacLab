@@ -68,7 +68,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     num_actions = 4
     num_observations = 12
     num_states = 0
-    debug_vis = True
+    debug_vis = False
 
     ui_window_class_type = QuadcopterEnvWindow
 
@@ -123,7 +123,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     # reward scales
     lin_vel_reward_scale = -0.05
     ang_vel_reward_scale = -0.5 #-0.01
-    distance_to_goal_reward_scale = 5.0 #15.0
+    distance_to_goal_reward_scale = 15.0 #15.0
 
 
 class QuadcopterEnv(DirectRLEnv):
@@ -142,9 +142,7 @@ class QuadcopterEnv(DirectRLEnv):
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         self.distance_to_goal = torch.zeros(self.num_envs, device=self.device)
         
-        #Obstacle position
-        self.obstacle_1_pos = torch.tensor([3.5, 1.5, 1.5], device=self.device)
-        self.obstacle_2_pos = torch.tensor([2.5, -1.5, 1.5], device=self.device)
+
         self.future_traj_steps = 4
 
         self.shortest_path = GuildingPath(progress_buf=self.episode_length_buf, 
@@ -156,7 +154,16 @@ class QuadcopterEnv(DirectRLEnv):
         self.shortest_path.generateGuidingPath()
         self.shortest_path.plot_shortest_path() 
 
+        self.target_pos = torch.zeros(self.num_envs, self.future_traj_steps, 3, device=self.device)
         
+
+        marker_cfg = CUBOID_MARKER_CFG.copy()
+        marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
+        # -- goal pose
+        marker_cfg.prim_path = "/Visuals/Command/goal_position"
+        self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
+        self.goal_pos_visualizer.set_visibility(True)
+
         # Logging
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -175,7 +182,7 @@ class QuadcopterEnv(DirectRLEnv):
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
 
-    def _add_obstacles(self):
+    def _add_obstacles(self,id, trans=(3.5, 1.5, 1.5)):
         # Rigid Object
         # cylinder_cfg = sim_utils.CylinderCfg(
         #     radius=0.5,
@@ -202,8 +209,10 @@ class QuadcopterEnv(DirectRLEnv):
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=0.2)
         )
-        cylinder_1 = spawn_cylinder(prim_path="/World/envs/env_.*/Cylinder_1", cfg=cylinder_cfg, translation=(3.5, 1.5, 1.5))
-        return cylinder_1
+        cylinder = spawn_cylinder(prim_path=f"/World/envs/env_.*/Cylinder_{id}", cfg=cylinder_cfg, translation=trans)
+        return cylinder
+    
+
 
 
     def _setup_scene(self):
@@ -214,7 +223,11 @@ class QuadcopterEnv(DirectRLEnv):
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
 
-        self.obstacle_1 = self._add_obstacles()
+        #Obstacle position
+        self.obstacle_1_pos = torch.tensor([3.5, 1.5, 1.5], device=self.device)
+        self.obstacle_2_pos = torch.tensor([2.5, -1.5, 1.5], device=self.device)
+        self.obstacle_1 = self._add_obstacles(id = 1, trans=self.obstacle_1_pos)
+        self.obstacle_2 = self._add_obstacles(id = 2, trans=self.obstacle_2_pos)
 
         # self.scene.rigid_objects["obstacles"] = self.obstacle_1
 
@@ -242,11 +255,11 @@ class QuadcopterEnv(DirectRLEnv):
     def _apply_action(self):
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
 
-    def _get_observations(self) -> dict:
-        # (self, steps: int, env_ids=None, step_size=1)
-       
+    def _get_observations(self) -> dict:   
         self.shortest_path.progress_buf = self.episode_length_buf
         self.target_pos = self.shortest_path.compute_shortest_traj(steps = self.future_traj_steps, step_size=5)
+        self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] - self._terrain.env_origins)
+        
         # print("\n")
         # print(self.target_pos[:,0,:].dtype)
         # print(self._robot.data.root_state_w[:, 3:7].dtype)
@@ -254,7 +267,7 @@ class QuadcopterEnv(DirectRLEnv):
         
         desired_pos_b, _ = subtract_frame_transforms(
             # self._robot.data.root_state_w[:, :3], self._robot.data.root_state_w[:, 3:7], self._desired_pos_w
-            self._robot.data.root_state_w[:, :3], self._robot.data.root_state_w[:, 3:7], self.target_pos[:,0,:].to(torch.float32)
+            t01=self._robot.data.root_state_w[:, :3]-self._terrain.env_origins, q01=self._robot.data.root_state_w[:, 3:7], t02=self.target_pos[:,0,:].to(torch.float32) 
         )
         # print("-------------------------------")
         # print(self.scene["height_scanner"])
@@ -271,6 +284,21 @@ class QuadcopterEnv(DirectRLEnv):
         )
         observations = {"policy": obs}
         return observations
+
+
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # print("progress ",self.episode_length_buf)
+        ones = torch.ones_like(self.reset_buf)
+        died = torch.zeros_like(self.reset_buf)
+    
+        time_out = self.episode_length_buf >= self.max_episode_length - 1
+        died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.2, self._robot.data.root_pos_w[:, 2] > 3.0)
+        
+        self._robot_pos = self._robot.data.root_pos_w - self._terrain.env_origins
+        self.distance_to_goal = torch.linalg.norm(self.target_pos[:,0,:] - self._robot_pos, dim=1)
+
+        died = torch.where(self.distance_to_goal > 0.25, ones, died)
+        return died, time_out
 
     def _get_rewards(self) -> torch.Tensor:
         lin_vel = torch.sum(torch.square(self._robot.data.root_lin_vel_b), dim=1)
@@ -294,26 +322,14 @@ class QuadcopterEnv(DirectRLEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
         return reward
-
-    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        # print("progress ",self.episode_length_buf)
-        ones = torch.ones_like(self.reset_buf)
-        died = torch.zeros_like(self.reset_buf)
     
-        time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        
-        self._robot_pos = self._robot.data.root_pos_w - self._terrain.env_origins
-        self.distance_to_goal = torch.linalg.norm(self.target_pos[:,0,:] - self._robot_pos, dim=1)
-        died = torch.where(self.distance_to_goal > 0.3, ones, died)
-        return died, time_out
-
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
 
         # Logging
         final_distance_to_goal = torch.linalg.norm(
+            #self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
             self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
         ).mean()
         extras = dict()
@@ -339,8 +355,13 @@ class QuadcopterEnv(DirectRLEnv):
 
         self._actions[env_ids] = 0.0
         
-        self.reset_buf[env_ids] = 0
-        self.episode_length_buf[env_ids] = 0
+        # self.reset_buf[env_ids] = 0
+        # self.episode_length_buf[env_ids] = 0
+
+        self.target_pos = self.target_pos.to(torch.float32)
+        self.target_pos[env_ids ,0,:2] = self._terrain.env_origins[env_ids, :2].to(torch.float32)
+        self.target_pos[: ,0, 2] = torch.ones_like(self.target_pos[:,0, 2])
+        # self.target_pos[env_ids] = self.shortest_path.reset_shortest_traj(steps=self.future_traj_steps, env_ids=env_ids).to(torch.float32)
         # Sample new commands
         # self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
         # self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
@@ -357,25 +378,25 @@ class QuadcopterEnv(DirectRLEnv):
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-    def _set_debug_vis_impl(self, debug_vis: bool):
-        # create markers if necessary for the first tome
-        if debug_vis:
-            if not hasattr(self, "goal_pos_visualizer"):
-                marker_cfg = CUBOID_MARKER_CFG.copy()
-                marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
-                # -- goal pose
-                marker_cfg.prim_path = "/Visuals/Command/goal_position"
-                self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
-            # set their visibility to true
-            self.goal_pos_visualizer.set_visibility(True)
-        else:
-            if hasattr(self, "goal_pos_visualizer"):
-                self.goal_pos_visualizer.set_visibility(False)
+    # def _set_debug_vis_impl(self, debug_vis: bool):
+    #     # create markers if necessary for the first tome
+    #     if debug_vis:
+    #         if not hasattr(self, "goal_pos_visualizer"):
+    #             marker_cfg = CUBOID_MARKER_CFG.copy()
+    #             marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
+    #             # -- goal pose
+    #             marker_cfg.prim_path = "/Visuals/Command/goal_position"
+    #             self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
+    #         # set their visibility to true
+    #         self.goal_pos_visualizer.set_visibility(True)
+    #     else:
+    #         if hasattr(self, "goal_pos_visualizer"):
+    #             self.goal_pos_visualizer.set_visibility(False)
 
-    def _debug_vis_callback(self, event):
-        # update the markers
-        # self.goal_pos_visualizer.visualize(self._desired_pos_w)
-        self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] - self._terrain.env_origins)
+    # def _debug_vis_callback(self, event):
+    #     # update the markers
+    #     # self.goal_pos_visualizer.visualize(self._desired_pos_w)
+    #     self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] - self._terrain.env_origins)
 
 
 
@@ -404,7 +425,7 @@ class GuildingPath:
         self.origin = torch.tensor([0.0, 0.0, 0.0], device=self.device)
         self.t = torch.zeros(self.num_envs, self.future_traj_steps, device=self.device)
         
-        self.num_samples = 4000 
+        self.num_samples = 8000  #4000  
         self.area_size = 10  #meter
         
         
@@ -484,7 +505,7 @@ class GuildingPath:
         # print("cylinder center = ",cylinder_center.shape)
 
         # print("samples center = ",samples.shape)
-        samples = samples[~self._in_cylinder(samples, self.cylinder_center, self.cylinder_radius)]
+        # samples = samples[~self._in_cylinder(samples, self.cylinder_center, self.cylinder_radius)]
         samples = samples[~self._in_cylinder(samples, obs0_position[:-1].to(self.device), self.cylinder_radius)]
         samples = samples[~self._in_cylinder(samples, obs1_position[:-1].to(self.device), self.cylinder_radius)]
         
@@ -532,15 +553,28 @@ class GuildingPath:
 
 
 
-    def compute_shortest_traj(self, steps: int, env_ids=None, step_size=1):
+    def compute_shortest_traj(self,steps: int, env_ids=None, step_size=1):
         if env_ids is None:
             env_ids = ...
 
         # print("progress ",self.progress_buf)
-        self.t = self.progress_buf[env_ids].unsqueeze(-1).long()*4 + step_size * torch.arange(steps, device=self.device, dtype=torch.long)
+        self.t = self.progress_buf[env_ids].unsqueeze(-1).long()*5 + step_size * torch.arange(steps, device=self.device, dtype=torch.long)
         self.traj_target_spline = self.duplicated_spline_xyz[torch.arange(self.duplicated_spline_xyz.size(0)).unsqueeze(1), self.t]
         
         return self.origin + self.traj_target_spline
+    
+    def reset_shortest_traj(self,steps: int, env_ids=None):
+        if env_ids is None:
+            env_ids = ...
+
+        # print("progress ",self.progress_buf)
+        self.t=  torch.arange(steps, device=self.device, dtype=torch.long)
+        self.traj_target_spline = self.duplicated_spline_xyz[env_ids][torch.arange(self.duplicated_spline_xyz.size(0)).unsqueeze(1), self.t]
+        
+        print(self.traj_target_spline)
+        print(self.traj_target_spline.shape)  
+        
+        return self.traj_target_spline
     
     def plot_shortest_path(self):
         traj_vis =  self.duplicated_spline_xyz[:,:,:] + self.origin    # !!!! must edit to max length of traj_target_spline
