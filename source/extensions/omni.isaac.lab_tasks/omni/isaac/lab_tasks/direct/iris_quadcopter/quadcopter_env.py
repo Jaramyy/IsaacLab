@@ -66,7 +66,9 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     episode_length_s = 15.0 #10.0
     decimation = 2 
     num_actions = 4
-    num_observations = 12
+    # num_observations = 12 # without orientation
+    num_observations = 13 # with orientation
+
     num_states = 0
     debug_vis = False
 
@@ -171,6 +173,7 @@ class QuadcopterEnv(DirectRLEnv):
                 "lin_vel",
                 "ang_vel",
                 "distance_to_goal",
+                "heading",
             ]
         }
         # Get specific body indices
@@ -258,8 +261,21 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_observations(self) -> dict:   
         self.shortest_path.progress_buf = self.episode_length_buf
         self.target_pos = self.shortest_path.compute_shortest_traj(steps = self.future_traj_steps, step_size=5)
-        self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] - self._terrain.env_origins)
+        self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] + self._terrain.env_origins)
         
+        self.next_point_path = self.target_pos[:, 1, :2] - self.target_pos[:, 0, :2]    # next point - current point (4096,2) {x,y}
+        self.ref_heading = torch.atan2(self.next_point_path[:, 1], self.next_point_path[:, 0])  # radian
+        self.robot_heading = self._robot.data.heading_w
+
+        # print("\n")
+        # print("ref head",self.ref_heading[2015])
+        # print("robot head ",self.robot_heading[2015])
+        # print(self.ref_heading[2015] - self.robot_heading[2015])
+        # print("\n")
+        # print(self.robot_heading)
+        # print(self.robot_heading.shape)
+
+
         # print("\n")
         # print(self.target_pos[:,0,:].dtype)
         # print(self._robot.data.root_state_w[:, 3:7].dtype)
@@ -269,6 +285,12 @@ class QuadcopterEnv(DirectRLEnv):
             # self._robot.data.root_state_w[:, :3], self._robot.data.root_state_w[:, 3:7], self._desired_pos_w
             t01=self._robot.data.root_state_w[:, :3]-self._terrain.env_origins, q01=self._robot.data.root_state_w[:, 3:7], t02=self.target_pos[:,0,:].to(torch.float32) 
         )
+        # print("\n")
+        # print(desired_pos_b.shape)
+        # print(self.robot_heading.shape)
+        # print(self.robot_heading.unsqueeze(-1).shape)
+        # print("\n")
+
         # print("-------------------------------")
         # print(self.scene["height_scanner"])
         # print("Received max height value: ", torch.min(self.scene["height_scanner"].data.ray_hits_w[..., -1]).item())
@@ -279,6 +301,7 @@ class QuadcopterEnv(DirectRLEnv):
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
                 desired_pos_b,
+                self.robot_heading.unsqueeze(-1),
             ],
             dim=-1,
         )
@@ -310,12 +333,16 @@ class QuadcopterEnv(DirectRLEnv):
         # print(self._robot.data.root_pos_w-self._terrain.env_origins)
         # self._robot_pos = self._robot.data.root_pos_w - self._terrain.env_origins
         # self.distance_to_goal = torch.linalg.norm(self.target_pos[:,0,:] - self._robot_pos , dim=1)
-        # print(self.distance_to_goal)
+        print("\n")
+        print(self.ref_heading - self.robot_heading)
+        print("\n")
+        
         distance_to_goal_mapped = 1 - torch.tanh(self.distance_to_goal / 0.8)
         rewards = {
             "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
             "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * self.step_dt,
             "distance_to_goal": distance_to_goal_mapped * self.cfg.distance_to_goal_reward_scale * self.step_dt,
+            # "heading": self.ref_heading - self.robot_heading * 1.0 * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
         # Logging
@@ -330,7 +357,7 @@ class QuadcopterEnv(DirectRLEnv):
         # Logging
         final_distance_to_goal = torch.linalg.norm(
             #self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
-            self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
+            self.target_pos[env_ids,0,:] - (self._robot.data.root_pos_w[env_ids] - self._terrain.env_origins[env_ids]), dim=1
         ).mean()
         extras = dict()
         for key in self._episode_sums.keys():
@@ -361,6 +388,7 @@ class QuadcopterEnv(DirectRLEnv):
         self.target_pos = self.target_pos.to(torch.float32)
         self.target_pos[env_ids ,0,:2] = self._terrain.env_origins[env_ids, :2].to(torch.float32)
         self.target_pos[: ,0, 2] = torch.ones_like(self.target_pos[:,0, 2])
+        self.goal_pos_visualizer.visualize(self.target_pos[:,0,:] + self._terrain.env_origins)
         # self.target_pos[env_ids] = self.shortest_path.reset_shortest_traj(steps=self.future_traj_steps, env_ids=env_ids).to(torch.float32)
         # Sample new commands
         # self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
@@ -425,7 +453,7 @@ class GuildingPath:
         self.origin = torch.tensor([0.0, 0.0, 0.0], device=self.device)
         self.t = torch.zeros(self.num_envs, self.future_traj_steps, device=self.device)
         
-        self.num_samples = 8000  #4000  
+        self.num_samples = 16000  #4000  
         self.area_size = 10  #meter
         
         
