@@ -14,7 +14,7 @@ import trimesh
 from typing import TYPE_CHECKING
 
 from .utils import *  # noqa: F401, F403
-from .utils import make_border, make_plane
+from .utils import make_border, make_plane, make_cylinder, make_box
 
 if TYPE_CHECKING:
     from . import mesh_terrains_cfg
@@ -855,3 +855,38 @@ def repeated_objects_terrain(
     meshes_list.append(platform)
 
     return meshes_list, origin
+
+
+def custom_flat_and_pole_terrain(
+        difficulty: float, cfg: mesh_terrains_cfg.customFlatAndPoleTerrainCfg
+) -> tuple[list[trimesh.Trimesh], np.ndarray]:
+    '''Generate a terrain with a flat ground and poles.'
+    '''
+    # resolve the terrain configuration
+    pole_radius = cfg.pole_radius
+    pole_height = cfg.pole_height
+    pole_pos = cfg.pole_pos
+    plane_size = cfg.plane_size
+    plane_height = cfg.plane_height
+    
+    # initialize list of meshes
+    meshes_list = list()
+
+    # Create a ground plane using `make_plane`
+    ground_plane = make_plane(size=plane_size, height=plane_height)
+    
+    # Create poles at each position in cfg.pole_pos
+    poles = []
+    for pos in pole_pos:
+        pole_center = (pos[0], pos[1], pole_height * 0.5)  # Adjust for correct height
+        pole = make_cylinder(radius=pole_radius, height=pole_height, center=pole_center)
+        poles.append(pole)
+
+    # Combine ground and poles
+    meshes_list = [ground_plane] + poles
+    # Define terrain origin
+    # origin = np.array([plane_size * 0.5, plane_size * 0.5, 0])
+    origin = np.asarray((0.5 * plane_size[0], 0.5 * plane_size[1], 0.0))
+    # origin = np.asarray([0.5 * cfg.size[0], 0.5 * cfg.size[1], 0.0])
+    return meshes_list, origin
+

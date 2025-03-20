@@ -22,7 +22,27 @@ class MeshPlaneTerrainCfg(SubTerrainBaseCfg):
     """Configuration for a plane mesh terrain."""
 
     function = mesh_terrains.flat_terrain
+    
+@configclass
+class customFlatAndPoleTerrainCfg(SubTerrainBaseCfg):
+    """Configuration for a custom flat and pole terrain."""
 
+    function = mesh_terrains.custom_flat_and_pole_terrain
+
+    # pole_height_range: tuple[float, float] = MISSING
+    # """The minimum and maximum height of the pole (in m)."""
+    pole_radius: float = 1.5
+    """The radius of the pole (in m)."""
+    platform_width: float = 1.0
+    """The width of the square platform at the center of the terrain. Defaults to 1.0."""
+    pole_height: float = 1.0
+    """The height of the pole (in m). Defaults to 1.0."""
+    pole_pos: list[tuple] = [(0, 0), (2, 2)]
+    """The position of the pole (in m). Defaults to (0, 0)."""
+    plane_size: tuple[float, float] = (10.0, 10.0)
+    """The size of the plane (in m). Defaults to 10."""''
+    plane_height: float = 0.1
+    """The height of the plane (in m). Defaults to 0."""
 
 @configclass
 class MeshPyramidStairsTerrainCfg(SubTerrainBaseCfg):
@@ -267,3 +287,6 @@ class MeshRepeatedCylindersTerrainCfg(MeshRepeatedObjectsTerrainCfg):
     """The box curriculum parameters at the start of the curriculum."""
     object_params_end: ObjectCfg = MISSING
     """The box curriculum parameters at the end of the curriculum."""
+
+
+
