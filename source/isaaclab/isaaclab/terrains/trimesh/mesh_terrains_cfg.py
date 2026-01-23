@@ -31,15 +31,15 @@ class customFlatAndPoleTerrainCfg(SubTerrainBaseCfg):
 
     # pole_height_range: tuple[float, float] = MISSING
     # """The minimum and maximum height of the pole (in m)."""
-    pole_radius: float = 1.5
+    pole_radius: float = 0.3
     """The radius of the pole (in m)."""
     platform_width: float = 1.0
     """The width of the square platform at the center of the terrain. Defaults to 1.0."""
-    pole_height: float = 1.0
+    pole_height: float = 4.0
     """The height of the pole (in m). Defaults to 1.0."""
-    pole_pos: list[tuple] = [(0, 0), (2, 2)]
+    pole_pos: list[tuple] = [(-0.5, 4.5, 1), (-3, 8, 1), (2, 10, 1)]
     """The position of the pole (in m). Defaults to (0, 0)."""
-    plane_size: tuple[float, float] = (10.0, 10.0)
+    plane_size: tuple[float, float] = (40.0, 40.0)
     """The size of the plane (in m). Defaults to 10."""''
     plane_height: float = 0.1
     """The height of the plane (in m). Defaults to 0."""

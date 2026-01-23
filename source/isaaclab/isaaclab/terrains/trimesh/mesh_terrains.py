@@ -873,12 +873,12 @@ def custom_flat_and_pole_terrain(
     meshes_list = list()
 
     # Create a ground plane using `make_plane`
-    ground_plane = make_plane(size=plane_size, height=plane_height)
+    ground_plane = make_plane(size=plane_size, height=plane_height, center_zero=False)
     
     # Create poles at each position in cfg.pole_pos
     poles = []
     for pos in pole_pos:
-        pole_center = (pos[0], pos[1], pole_height * 0.5)  # Adjust for correct height
+        pole_center = (pos[0] + (plane_size[0] * 0.5), pos[1] + (plane_size[1] * 0.5), pole_height * 0.5)  # Adjust for correct height
         pole = make_cylinder(radius=pole_radius, height=pole_height, center=pole_center)
         poles.append(pole)
 
